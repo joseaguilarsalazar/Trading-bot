@@ -1,6 +1,3 @@
-PS C:\Users\JoseAguilar\dev\trading_bot> & C:/Users/JoseAguilar/AppData/Local/Programs/Python/Python310/python.exe c:/Users/JoseAguilar/dev/trading_bot/testing.py
-c:\Users\JoseAguilar\dev\trading_bot\testing.py:23: FutureWarning: 'H' is deprecated and will be removed in a future version, please use 'h' instead.
-  df = df.set_index('datetime').resample('1H').first().dropna().reset_index()
 
 ========== BACKTEST RESULT ==========
 Period: 2021-11-01 00:00:00+00:00 to 2022-12-01 00:00:00+00:00
@@ -14,10 +11,6 @@ HOLD CAGR: -69.23%
 Total Trades: 2783
 ====================================
 
-PS C:\Users\JoseAguilar\dev\trading_bot> & C:/Users/JoseAguilar/AppData/Local/Programs/Python/Python310/python.exe c:/Users/JoseAguilar/dev/trading_bot/testing.py
-c:\Users\JoseAguilar\dev\trading_bot\testing.py:23: FutureWarning: 'H' is deprecated and will be removed in a future version, please use 'h' instead.
-  df = df.set_index('datetime').resample('1H').first().dropna().reset_index()
-
 ========== BACKTEST RESULT ==========
 Period: 2022-12-01 00:00:00+00:00 to 2024-04-01 00:00:00+00:00
 Total Years: 1.33
@@ -29,10 +22,6 @@ HOLD Total Return: 319.61%
 HOLD CAGR: 192.97%
 Total Trades: 2556
 ====================================
-
-PS C:\Users\JoseAguilar\dev\trading_bot> & C:/Users/JoseAguilar/AppData/Local/Programs/Python/Python310/python.exe c:/Users/JoseAguilar/dev/trading_bot/testing.py
-c:\Users\JoseAguilar\dev\trading_bot\testing.py:23: FutureWarning: 'H' is deprecated and will be removed in a future version, please use 'h' instead.
-  df = df.set_index('datetime').resample('1H').first().dropna().reset_index()
 
 ========== BACKTEST RESULT ==========
 Period: 2021-11-01 00:00:00+00:00 to 2024-04-01 00:00:00+00:00
@@ -46,10 +35,6 @@ HOLD CAGR: 6.78%
 Total Trades: 7713
 ====================================
 
-PS C:\Users\JoseAguilar\dev\trading_bot> & C:/Users/JoseAguilar/AppData/Local/Programs/Python/Python310/python.exe c:/Users/JoseAguilar/dev/trading_bot/testing.py
-c:\Users\JoseAguilar\dev\trading_bot\testing.py:23: FutureWarning: 'H' is deprecated and will be removed in a future version, please use 'h' instead.
-  df = df.set_index('datetime').resample('1H').first().dropna().reset_index()
-
 ========== BACKTEST RESULT ==========
 Period: 2012-11-01 00:00:00+00:00 to 2024-04-01 00:00:00+00:00
 Total Years: 11.42
@@ -60,4 +45,41 @@ Average Annual Growth Rate (CAGR): 40.64%
 HOLD Total Return: 661211.63%
 HOLD CAGR: 116.01%
 Total Trades: 19983
+====================================
+#############################################################
+
+========== BACKTEST RESULT ==========
+Period: 2021-11-01 00:00:00+00:00 to 2022-12-01 00:00:00+00:00
+Total Years: 1.08
+Final Portfolio Value: 11164.21 USD
+Total Return: 11.64%
+Average Annual Growth Rate (CAGR): 10.71%
+
+HOLD Total Return: -72.07%
+HOLD CAGR: -69.23%
+Total Trades: 7
+====================================
+
+========== BACKTEST RESULT ==========
+Period: 2021-11-01 00:00:00+00:00 to 2024-04-01 00:00:00+00:00
+Total Years: 2.42
+Final Portfolio Value: 11164.21 USD
+Total Return: 11.64%
+Average Annual Growth Rate (CAGR): 4.66%
+
+HOLD Total Return: 17.19%
+HOLD CAGR: 6.78%
+Total Trades: 7
+====================================
+
+========== BACKTEST RESULT ==========
+Period: 2022-12-01 00:00:00+00:00 to 2024-04-01 00:00:00+00:00
+Total Years: 1.33
+Final Portfolio Value: 10000.00 USD
+Total Return: 0.00%
+Average Annual Growth Rate (CAGR): 0.00%
+
+HOLD Total Return: 319.61%
+HOLD CAGR: 192.97%
+Total Trades: 0
 ====================================

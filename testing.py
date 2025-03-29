@@ -1,7 +1,16 @@
 import pandas as pd
 import os
 from dotenv import load_dotenv
-from main import check_signal, EMA_LONG, ATR_PERIOD, EMA_SHORT, get_stop_loss_take_profit, calculate_position_size, get_market_regime
+from main import (check_signal, 
+                  EMA_LONG, 
+                  ATR_PERIOD, 
+                  EMA_SHORT, 
+                  get_stop_loss_take_profit, 
+                  calculate_position_size, 
+                  get_market_regime,
+                  trend_is_strong,
+                  get_dynamic_trailing_multiplier,
+                  )
 
 # === LOAD ENV VARIABLES ===
 load_dotenv()
@@ -50,7 +59,7 @@ def backtest(csv_path, start_date, end_date):
     for i in range(len(df)):
 
         # Wait until indicators are ready
-        if i < max(EMA_LONG, ATR_PERIOD):
+        if i < max(EMA_LONG, ATR_PERIOD) or df['atr'].iloc[i] == 0:
             signals.append(None)
             portfolio_values.append(balance)
             continue
@@ -59,18 +68,19 @@ def backtest(csv_path, start_date, end_date):
         last = df.iloc[:i+1]
         price = df.iloc[i]['Close']
         atr = df.iloc[i]['atr']
+        atr_mean = df['atr'].iloc[:i+1].mean()
         regime = get_market_regime(last)
 
         # Get Signal
         signal = check_signal(last)
         signals.append(signal)
+        
 
         # === Entry ===
-        if position is None and signal == 'buy' and balance > 0:
-            atr_mean = last['atr'].mean()
-            stop_loss, take_profit, multiplier = get_stop_loss_take_profit(price, atr, atr_mean, regime)
+        if position is None and signal == 'buy' and balance > 0 and trend_is_strong(last):
+            stop_loss, take_profit = get_stop_loss_take_profit(price, atr, regime)
 
-            position_size = calculate_position_size(balance, atr, multiplier)
+            position_size = calculate_position_size(balance, atr, atr_mean, regime)
             position_size = min(position_size, balance / price)  # Cap to available balance
 
             if position_size > 0:
@@ -79,10 +89,14 @@ def backtest(csv_path, start_date, end_date):
 
         # === Position Management ===
         elif position is not None:
+            
 
             # Trailing Stop (Bull Only)
             if regime == 'bull':
-                stop_loss = max(stop_loss, price - 3 * atr)
+                multiplier = get_dynamic_trailing_multiplier(atr, atr_mean, regime)
+                stop_loss = max(stop_loss, price - multiplier * atr)
+
+                
 
             # === Exit Conditions ===
             if price <= stop_loss or (regime != 'bull' and price >= take_profit) or signal == 'sell':
@@ -128,6 +142,6 @@ def calculate_and_print_stats(df):
 
 
 if __name__ == "__main__":
-    start_date = '2022-12-01'
+    start_date = '2021-12-01'
     end_date = '2024-04-01'
     backtest('btcusd_1-min_data.csv', start_date, end_date)
