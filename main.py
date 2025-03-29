@@ -4,6 +4,8 @@ import time
 import requests
 import os
 from dotenv import load_dotenv
+from binance.client import Client
+TEST =True
 
 # === LOAD ENV VARIABLES ===
 load_dotenv()
@@ -13,7 +15,7 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 # === CONFIG ===
-SYMBOL = 'BTC/USDT'
+SYMBOL = 'BTCUSDT'
 POSITION_SIZE = 0.001  # Adjust to your risk
 ATR_PERIOD = 14
 EMA_SHORT = 50
@@ -21,11 +23,9 @@ EMA_LONG = 200
 VOLATILITY_THRESHOLD = 0.75  # Example threshold for ATR filter
 
 # === EXCHANGE SETUP ===
-exchange = ccxt.binance({
-    'apiKey': API_KEY,
-    'secret': API_SECRET,
-    'enableRateLimit': True
-})
+client = Client('IW4Ap8Dt8ykhNsNNmpJkbr29wniP1cbDG7kxjWHDo8a2sbuQQ5e0DPNJzl2fAhFh',
+                'C87G8ymR6Ae3mHMtXiHu8YLo14CLmAV5MjfX7oZsqVkVLr79wHBGv40dNBnkm8eI',
+                testnet=True)
 
 def send_alert(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -34,12 +34,32 @@ def send_alert(message):
 
 # === DATA FETCH ===
 def get_data(days=90):
-    since = exchange.milliseconds() - days * 24 * 60 * 60 * 1000
-    bars = exchange.fetch_ohlcv(SYMBOL, timeframe='1h', since=since)
-    df = pd.DataFrame(bars, columns=['Timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
+    """Fetches historical OHLCV data using python-binance."""
+    
+    # Calculate the timestamp for the start date
+    since = int(time.time() * 1000) - days * 24 * 60 * 60 * 1000
+
+    # Fetch historical K-line (candlestick) data
+    bars = client.get_historical_klines(SYMBOL, Client.KLINE_INTERVAL_1HOUR, since)
+
+    # Convert data into a Pandas DataFrame
+    df = pd.DataFrame(bars, columns=[
+        'Timestamp', 'Open', 'High', 'Low', 'Close', 'Volume',
+        'CloseTime', 'QuoteAssetVolume', 'NumberOfTrades', 
+        'TakerBuyBaseAssetVolume', 'TakerBuyQuoteAssetVolume', 'Ignore'
+    ])
+    
+    # Convert relevant columns to numeric
+    df = df[['Timestamp', 'Open', 'High', 'Low', 'Close', 'Volume']].astype(float)
+    
+    # Convert Timestamp to readable datetime
+    df['Timestamp'] = pd.to_datetime(df['Timestamp'], unit='ms')
+
+    # Calculate indicators
     df['ema_short'] = df['Close'].ewm(span=EMA_SHORT, adjust=False).mean()
     df['ema_long'] = df['Close'].ewm(span=EMA_LONG, adjust=False).mean()
     df['atr'] = df['High'].rolling(ATR_PERIOD).max() - df['Low'].rolling(ATR_PERIOD).min()
+
     return df
 
 # === MARKET REGIME ===
@@ -92,7 +112,6 @@ def get_stop_loss_take_profit(price, atr, regime):
         take_profit = price + 3 * atr
     return stop_loss, take_profit
 
-
 # === POSITION SIZE ===
 def calculate_position_size(balance, atr, atr_mean, regime):
     base_risk = 0.02  # 2% risk
@@ -101,16 +120,42 @@ def calculate_position_size(balance, atr, atr_mean, regime):
     return position_size * volatility_factor
 
 # === EXECUTE TRADE ===
-def execute_trade(signal):
+def execute_trade(signal, price, position_size, stop_loss, take_profit):
     try:
         if signal == 'buy':
-            exchange.create_market_buy_order(SYMBOL, POSITION_SIZE)
-            send_alert("[BOT] BUY ORDER executed.")
+            order = client.order_market_buy(
+                symbol=SYMBOL,
+                quantity=position_size
+            )
+
         elif signal == 'sell':
-            exchange.create_market_sell_order(SYMBOL, POSITION_SIZE)
-            send_alert("[BOT] SELL ORDER executed.")
+            order = client.order_market_sell(
+                symbol=SYMBOL,
+                quantity=position_size
+            )
+
+        # Fetch updated balances
+        account_info = client.get_account()
+        balances = {asset['asset']: float(asset['free']) for asset in account_info['balances']}
+        usdt_balance = balances.get('USDT', 0)
+        btc_balance = balances.get('BTC', 0)
+
+        # Send trade confirmation alert
+        send_alert(f"[BOT] ✅ {signal.upper()} ORDER executed.\n"
+                   f"📌 Price: {price:.2f} USDT\n"
+                   f"📈 Position Size: {position_size:.6f} BTC\n"
+                   f"🛑 Stop Loss: {stop_loss:.2f} USDT\n"
+                   f"🎯 Take Profit: {take_profit:.2f} USDT\n"
+                   f"💰 New Balance: {usdt_balance:.2f} USDT | {btc_balance:.6f} BTC")
+
     except Exception as e:
-        send_alert(f"[BOT] ERROR: {str(e)}")
+        send_alert(f"[BOT] ❌ ERROR: {str(e)}")
+
+
+    except Exception as e:
+        send_alert(f"[BOT] ❌ ERROR: {str(e)}")
+
+
 
 
 
