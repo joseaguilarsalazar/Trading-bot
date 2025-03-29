@@ -20,7 +20,7 @@ def get_data_from_csv(csv_path, start_date, end_date):
     df = df[(df['datetime'] >= start_date) & (df['datetime'] <= end_date)]
     
     # Resample to 1-hour intervals (take the first available candle of each hour)
-    df = df.set_index('datetime').resample('1H').first().dropna().reset_index()
+    df = df.set_index('datetime').resample('1h').first().dropna().reset_index()
     
     # Recalculate indicators
     df['ema_short'] = df['Close'].ewm(span=EMA_SHORT, adjust=False).mean()
@@ -30,76 +30,90 @@ def get_data_from_csv(csv_path, start_date, end_date):
     return df
 
 
-# === BACKTEST ===
+# === CLEAN & MODULAR BACKTEST ===
 def backtest(csv_path, start_date, end_date):
+    # Load Data
     df = get_data_from_csv(csv_path, start_date, end_date)
 
+    # Initialize Portfolio
     balance = INITIAL_BALANCE
     position = None
     position_size = 0
     stop_loss = None
     take_profit = None
+
+    # Tracking lists
+    signals = []
     portfolio_values = []
 
-    signals = []
-
+    # === MAIN LOOP ===
     for i in range(len(df)):
+
+        # Wait until indicators are ready
         if i < max(EMA_LONG, ATR_PERIOD):
             signals.append(None)
             portfolio_values.append(balance)
             continue
 
+        # Prepare data window
         last = df.iloc[:i+1]
+        price = df.iloc[i]['Close']
+        atr = df.iloc[i]['atr']
+        regime = get_market_regime(last)
+
+        # Get Signal
         signal = check_signal(last)
         signals.append(signal)
 
-        price = df.iloc[i]['Close']
-        atr = df.iloc[i]['atr']
-        regime = get_market_regime(df.iloc[:i+1])
-
-        # === Buy ===
+        # === Entry ===
         if position is None and signal == 'buy' and balance > 0:
-            position = price
-            position_size = balance / price
-            balance = 0
-            stop_loss, take_profit = get_stop_loss_take_profit(position, atr, regime)
+            atr_mean = last['atr'].mean()
+            stop_loss, take_profit, multiplier = get_stop_loss_take_profit(price, atr, atr_mean, regime)
 
-        # === Trailing Stop Loss ===
+            position_size = calculate_position_size(balance, atr, multiplier)
+            position_size = min(position_size, balance / price)  # Cap to available balance
+
+            if position_size > 0:
+                position = price
+                balance -= position_size * price
+
+        # === Position Management ===
         elif position is not None:
+
+            # Trailing Stop (Bull Only)
             if regime == 'bull':
                 stop_loss = max(stop_loss, price - 3 * atr)
 
-            # === Exit ===
+            # === Exit Conditions ===
             if price <= stop_loss or (regime != 'bull' and price >= take_profit) or signal == 'sell':
-                balance = position_size * price
-                position = None
-                position_size = 0
-                stop_loss = None
-                take_profit = None
+                balance += position_size * price
+                position, position_size, stop_loss, take_profit = None, 0, None, None
 
+        # === Record Portfolio Value ===
         current_value = balance + (position_size * price if position is not None else 0)
         portfolio_values.append(current_value)
 
+    # === Save Results ===
     df['signal'] = signals
     df['portfolio_value'] = portfolio_values
+    df.to_csv('backtest_result.csv', index=False)
 
-    # === Calculate CAGR ===
+    # === Metrics ===
+    calculate_and_print_stats(df)
+
+
+# === Metrics Function ===
+def calculate_and_print_stats(df):
     years = (df['datetime'].iloc[-1] - df['datetime'].iloc[0]).days / 365.0
     final_value = df['portfolio_value'].iloc[-1]
-    total_return = ((final_value / INITIAL_BALANCE) - 1) * 100 if INITIAL_BALANCE > 0 else 0
+    total_return = ((final_value / INITIAL_BALANCE) - 1) * 100
     cagr = ((final_value / INITIAL_BALANCE) ** (1 / years) - 1) * 100 if years > 0 else 0
 
-    # === HOLD STRATEGY ===
     hold_return = ((df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1) * 100
     hold_cagr = ((df['Close'].iloc[-1] / df['Close'].iloc[0]) ** (1 / years) - 1) * 100 if years > 0 else 0
 
-    # === TRADE COUNT ===
     trades_count = df['signal'].value_counts().get('buy', 0)
 
-    # === Save CSV ===
-    df.to_csv('backtest_result.csv', index=False)
-
-    # === REPORT ===
     print("\n========== BACKTEST RESULT ==========")
     print(f"Period: {df['datetime'].iloc[0]} to {df['datetime'].iloc[-1]}")
     print(f"Total Years: {years:.2f}")
@@ -113,12 +127,7 @@ def backtest(csv_path, start_date, end_date):
 
 
 
-
-
-
-
-
 if __name__ == "__main__":
-    start_date = '2021-11-01'
-    end_date = '2022-12-01'
+    start_date = '2022-12-01'
+    end_date = '2024-04-01'
     backtest('btcusd_1-min_data.csv', start_date, end_date)

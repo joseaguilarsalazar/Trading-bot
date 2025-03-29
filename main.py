@@ -27,22 +27,22 @@ exchange = ccxt.binance({
     'enableRateLimit': True
 })
 
-# === ALERTS ===
 def send_alert(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     requests.post(url, data=data)
 
 # === DATA FETCH ===
-def get_data(days=90):  # default = 90 days
-    since = exchange.milliseconds() - days * 24 * 60 * 60 * 1000  # ms
+def get_data(days=90):
+    since = exchange.milliseconds() - days * 24 * 60 * 60 * 1000
     bars = exchange.fetch_ohlcv(SYMBOL, timeframe='1h', since=since)
-    df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-    df['ema_short'] = df['close'].ewm(span=EMA_SHORT, adjust=False).mean()
-    df['ema_long'] = df['close'].ewm(span=EMA_LONG, adjust=False).mean()
-    df['atr'] = df['high'].rolling(ATR_PERIOD).max() - df['low'].rolling(ATR_PERIOD).min()
+    df = pd.DataFrame(bars, columns=['Timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
+    df['ema_short'] = df['Close'].ewm(span=EMA_SHORT, adjust=False).mean()
+    df['ema_long'] = df['Close'].ewm(span=EMA_LONG, adjust=False).mean()
+    df['atr'] = df['High'].rolling(ATR_PERIOD).max() - df['Low'].rolling(ATR_PERIOD).min()
     return df
 
+# === MARKET REGIME ===
 def get_market_regime(df):
     ema_50 = df['Close'].ewm(span=50, adjust=False).mean().iloc[-1]
     ema_200 = df['Close'].ewm(span=200, adjust=False).mean().iloc[-1]
@@ -52,19 +52,12 @@ def get_market_regime(df):
         return 'bear'
     else:
         return 'sideways'
-    
 
-
-# === TRADING LOGIC ===
+# === SIGNAL ===
 def check_signal(df):
     last = df.iloc[-1]
     atr_mean = df['atr'].mean()
-    regime = get_market_regime(df)
-
-    if regime == 'bull':
-        atr_is_calm = last['atr'] < atr_mean * 3  # looser filter
-    else:
-        atr_is_calm = last['atr'] < atr_mean  # stricter
+    atr_is_calm = last['atr'] < atr_mean
 
     if last['ema_short'] > last['ema_long'] and atr_is_calm:
         return 'buy'
@@ -72,58 +65,53 @@ def check_signal(df):
         return 'sell'
     return None
 
-def get_stop_loss_take_profit(entry_price, atr, regime, base_risk=2, base_rr=2):
-    if regime == 'bull':
-        stop_loss = entry_price - 3 * atr  # wider SL
-        take_profit = entry_price + 3 * atr * base_rr
-    elif regime == 'bear':
-        stop_loss = entry_price - 2 * atr
-        take_profit = entry_price + 2 * atr * base_rr
-    else:  # sideways
-        stop_loss = entry_price - 1.5 * atr
-        take_profit = entry_price + 1.5 * atr * base_rr
-    return stop_loss, take_profit
-
-def calculate_position_size(balance, entry_price, stop_loss, risk_percent=0.02):
+def get_dynamic_atr_multiplier(atr, atr_mean, base=2.0):
     """
-    Calculates dynamic position size based on account balance and stop loss distance.
-
-    Parameters:
-        balance (float): Current available balance.
-        entry_price (float): The price you are buying at.
-        stop_loss (float): The stop loss price.
-        risk_percent (float): The % of balance you are willing to risk (default 2%).
-
-    Returns:
-        float: Position size (number of units to buy).
+    Calculate dynamic ATR multiplier based on volatility.
+    More volatile = wider stops.
     """
-    risk_amount = balance * risk_percent
-    stop_loss_distance = abs(entry_price - stop_loss)
-    if stop_loss_distance == 0:
-        return 0  # Avoid division by zero
-    position_size = risk_amount / stop_loss_distance
-    return position_size
+    volatility_ratio = atr / atr_mean if atr_mean > 0 else 1
+    multiplier = base + volatility_ratio  # base=2 means default is 2x ATR
+    return multiplier
 
-def get_dynamic_trailing_stop(price, atr, ema_slope, base_multiplier=3):
+# === STOP LOSS & TAKE PROFIT ===
+def get_stop_loss_take_profit(entry_price, atr, atr_mean, regime):
     """
-    Adjust trailing stop dynamically based on EMA50 slope.
+    Dynamically adjusts stop loss and take profit based on volatility and regime.
+    """
+    multiplier = get_dynamic_atr_multiplier(atr, atr_mean)
     
-    Parameters:
-        price (float): Current price.
-        atr (float): Current ATR.
-        ema_slope (float): The slope (momentum) of EMA50.
-        base_multiplier (float): Base multiplier for trailing stop.
-        
-    Returns:
-        float: New trailing stop price.
-    """
-    # Normalize slope effect
-    slope_factor = min(max(abs(ema_slope) / 0.0005, 0.5), 2.0)  # between 0.5x and 2x
+    if regime == 'bull':
+        stop_loss = entry_price - multiplier * atr * 2
+        take_profit = entry_price + multiplier * atr * 3
+    elif regime == 'bear':
+        stop_loss = entry_price - multiplier * atr
+        take_profit = entry_price + multiplier * atr * 1.5
+    else:  # sideways
+        stop_loss = entry_price - multiplier * atr * 0.75
+        take_profit = entry_price + multiplier * atr * 1.0
+
+    return stop_loss, take_profit, multiplier
+
+# === DYNAMIC TRAILING STOP ===
+def get_dynamic_trailing_stop(price, atr, ema_slope, base_multiplier=3):
+    slope_factor = min(max(abs(ema_slope) / 0.0005, 0.5), 2.0)
     trailing_multiplier = base_multiplier * slope_factor
     return price - trailing_multiplier * atr
 
+# === POSITION SIZE ===
+def calculate_position_size(balance, atr, multiplier, risk_percent=0.02):
+    """
+    Adjusts position size based on volatility and risk %.
+    """
+    risk_amount = balance * risk_percent
+    stop_loss_distance = atr * multiplier
+    if stop_loss_distance == 0:
+        return 0
+    position_size = risk_amount / stop_loss_distance
+    return position_size
 
-# === ORDER EXECUTION ===
+# === EXECUTE TRADE ===
 def execute_trade(signal):
     try:
         if signal == 'buy':
@@ -134,6 +122,62 @@ def execute_trade(signal):
             send_alert("[BOT] SELL ORDER executed.")
     except Exception as e:
         send_alert(f"[BOT] ERROR: {str(e)}")
+
+def get_dynamic_trailing_stop(price, atr, regime, ema_slope):
+    """
+    Dynamically adjusts the trailing stop multiplier based on the market regime and EMA slope (momentum).
+
+    Parameters:
+        price (float): Current price.
+        atr (float): Current ATR value.
+        regime (str): Market regime ('bull', 'bear', 'sideways').
+        ema_slope (float): The slope of the EMA.
+
+    Returns:
+        float: The new trailing stop price.
+    """
+
+    if regime == 'bull':
+        if ema_slope > 0.1:  # strong momentum
+            multiplier = 4
+        elif ema_slope > 0.05:
+            multiplier = 3
+        else:
+            multiplier = 2
+    elif regime == 'bear':
+        multiplier = 2
+    else:  # sideways
+        multiplier = 1.5
+
+    return price - multiplier * atr
+
+
+def get_partial_sell_targets(entry_price, atr, regime, base_rr=2):
+    """
+    Calculates two profit targets for partial position selling.
+
+    Parameters:
+        entry_price (float): The price at which the position is opened.
+        atr (float): The current ATR value.
+        regime (str): Market regime ('bull', 'bear', 'sideways').
+        base_rr (float): Base risk-reward ratio.
+
+    Returns:
+        tuple: (first_target, final_target)
+    """
+
+    if regime == 'bull':
+        rr1, rr2 = 2, 4  # Bull markets aim for higher second targets
+    elif regime == 'bear':
+        rr1, rr2 = 1.5, 2.5
+    else:  # sideways
+        rr1, rr2 = 1, 2
+
+    first_target = entry_price + rr1 * atr
+    final_target = entry_price + rr2 * atr
+
+    return first_target, final_target
+
 
 # === MAIN LOOP ===
 if __name__ == "__main__":
