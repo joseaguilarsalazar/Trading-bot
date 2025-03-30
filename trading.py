@@ -85,7 +85,7 @@ else:
                 else:
                     send_alert('Trade not executed, conditions not met')
             else:
-                print('Nothing happens')
+                send_alert('Nothing happens')
             
         except Exception as e:
             error_msg = f'[BOT] ERROR: {str(e)}'
