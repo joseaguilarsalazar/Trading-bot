@@ -1,22 +1,22 @@
 import pandas as pd
-import os
+from datetime import datetime
 from dotenv import load_dotenv
-from main import (check_signal, 
+from main import (
                   EMA_LONG, 
                   ATR_PERIOD, 
                   EMA_SHORT, 
                   get_stop_loss_take_profit, 
-                  calculate_position_size, 
                   get_market_regime,
-                  trend_is_strong,
                   get_dynamic_trailing_multiplier,
+                  calculate_trend_strength,
                   )
+from check_signal import check_signal
+from testClient import TestClient
 
 # === LOAD ENV VARIABLES ===
 load_dotenv()
 
 # === CONFIG ===
-SYMBOL = 'BTC/USDT'
 INITIAL_BALANCE = 10000  # <<< You can adjust this manually
 
 
@@ -25,16 +25,23 @@ def get_data_from_csv(csv_path, start_date, end_date):
     df = pd.read_csv(csv_path)
     
     # Parse datetime and filter date range
-    df['datetime'] = pd.to_datetime(df['datetime'])
+    df['datetime'] = pd.to_datetime(df['Open time'])
     df = df[(df['datetime'] >= start_date) & (df['datetime'] <= end_date)]
-    
-    # Resample to 1-hour intervals (take the first available candle of each hour)
-    df = df.set_index('datetime').resample('1h').first().dropna().reset_index()
     
     # Recalculate indicators
     df['ema_short'] = df['Close'].ewm(span=EMA_SHORT, adjust=False).mean()
     df['ema_long'] = df['Close'].ewm(span=EMA_LONG, adjust=False).mean()
-    df['atr'] = df['High'].rolling(ATR_PERIOD).max() - df['Low'].rolling(ATR_PERIOD).min()
+    df['high_low'] = df['High'] - df['Low']
+    df['high_prev_close'] = abs(df['High'] - df['Close'].shift(1))
+    df['low_prev_close'] = abs(df['Low'] - df['Close'].shift(1))
+
+    df['TR'] = df[['high_low', 'high_prev_close', 'low_prev_close']].max(axis=1)
+
+    # Calculate ATR (14-period is common)
+    df['atr'] = df['TR'].rolling(window=ATR_PERIOD).mean()
+
+    # ✅ Add ATR mean calculation
+    df['atr_mean'] = df['atr'].rolling(window=ATR_PERIOD).mean()  # Smoothed ATR
     
     return df
 
@@ -44,104 +51,137 @@ def backtest(csv_path, start_date, end_date):
     # Load Data
     df = get_data_from_csv(csv_path, start_date, end_date)
 
+    initial_price = float(df.iloc[0]['Open'])
+    end_price = float(df.iloc[-1]['Close'])
+
     # Initialize Portfolio
-    balance = INITIAL_BALANCE
-    position = None
-    position_size = 0
-    stop_loss = None
-    take_profit = None
-
-    # Tracking lists
-    signals = []
-    portfolio_values = []
-
+    client = TestClient(INITIAL_BALANCE)
+    signalCount = 0
+    s_cound = 0
+    b_count = 0
+    sb = 0
     # === MAIN LOOP ===
     for i in range(len(df)):
 
-        # Wait until indicators are ready
-        if i < max(EMA_LONG, ATR_PERIOD) or df['atr'].iloc[i] == 0:
-            signals.append(None)
-            portfolio_values.append(balance)
-            continue
-
         # Prepare data window
-        last = df.iloc[:i+1]
+        previousTrades = df.iloc[:i+1]
+        last = previousTrades.iloc[-1] 
         price = df.iloc[i]['Close']
         atr = df.iloc[i]['atr']
-        atr_mean = df['atr'].iloc[:i+1].mean()
-        regime = get_market_regime(last)
+        atr_mean = df.iloc[i]['atr_mean']
+        regime, avg_diff, trend_strength, atr_pct = get_market_regime(previousTrades)
+
+        if client.check_margin(price) == False:
+            print('El bot se quedo sin fondos')
+            print(f'Fecha: {last[datetime]}')
+            print(client.USDT)
+            print(client.BTC)
+            print(price)
 
         # Get Signal
-        signal = check_signal(last)
-        signals.append(signal)
+        result = check_signal(last, regime, trend_strength, atr_pct, client.position)
+        if result:
+            signal = result['action']
+            signalCount += 1
+        else:
+            signal = None
         
-
         # === Entry ===
-        if position is None and signal == 'buy' and balance > 0 and trend_is_strong(last):
-            stop_loss, take_profit = get_stop_loss_take_profit(price, atr, regime)
-
-            position_size = calculate_position_size(balance, atr, atr_mean, regime)
-            position_size = min(position_size, balance / price)  # Cap to available balance
-
-            if position_size > 0:
-                position = price
-                balance -= position_size * price
-
-        # === Position Management ===
-        elif position is not None:
+        if client.position is None and (signal == 'open_long' or signal == 'open_short') and client.USDT > 0:
+            trend_strength = calculate_trend_strength(previousTrades)
+            print(signal)
+            client.open_position('long' if signal == 'open_long' else 'short', price, regime, trend_strength, df.iloc[i]['datetime'])
+            client.stop_loss, client.take_profit = get_stop_loss_take_profit(price, atr, regime, trend_strength, client.position, client.entry_price, client.stop_loss, client.stop_loss)
             
-
-            # Trailing Stop (Bull Only)
-            if regime == 'bull':
+        # === Position Management ===
+        elif client.position is not None and (signal == 'close_long' or signal == 'close_short'): 
+            # Trailing Stop (Bull and Strong Bull Only)
+            if regime in ['bull', 'strong_bull']:
                 multiplier = get_dynamic_trailing_multiplier(atr, atr_mean, regime)
-                stop_loss = max(stop_loss, price - multiplier * atr)
-
-                
+                client.stop_loss = max(client.stop_loss, price - multiplier * atr)
 
             # === Exit Conditions ===
-            if price <= stop_loss or (regime != 'bull' and price >= take_profit) or signal == 'sell':
-                balance += position_size * price
-                position, position_size, stop_loss, take_profit = None, 0, None, None
+            exit_condition = (
+                price <= client.stop_loss or  # Hit stop loss
+                price >= client.take_profit or  
+                (signal == 'close_long' or signal == 'close_short')  # Sell signal
+            )
+            if client.position == 'long':
+                if exit_condition:
+                    client.close_position(price, regime, trend_strength, df.iloc[i]['datetime'])
+            else:
+                exit_condition = (
+                price >= client.stop_loss or  # Hit stop loss
+                price <= client.take_profit or  
+                (signal == 'close_long' or signal == 'close_short')  # Sell signal
+            )
+                if exit_condition:
+                    client.close_position(price, regime, trend_strength, df.iloc[i]['datetime'])
 
-        # === Record Portfolio Value ===
-        current_value = balance + (position_size * price if position is not None else 0)
-        portfolio_values.append(current_value)
-
-    # === Save Results ===
-    df['signal'] = signals
-    df['portfolio_value'] = portfolio_values
-    df.to_csv('backtest_result.csv', index=False)
 
     # === Metrics ===
-    calculate_and_print_stats(df)
+        
+
+    print(f'Sideways: {s_cound}')
+    print(f'Weak Bear: {b_count}')
+    print(f'Strong bear: {sb}')
+    calculate_and_print_stats(client, INITIAL_BALANCE, start_date, end_date, initial_price, end_price)
+    print(signalCount)
+    print(client.get_summary())
+    client.export_trade_log_to_csv()
 
 
 # === Metrics Function ===
-def calculate_and_print_stats(df):
-    years = (df['datetime'].iloc[-1] - df['datetime'].iloc[0]).days / 365.0
-    final_value = df['portfolio_value'].iloc[-1]
-    total_return = ((final_value / INITIAL_BALANCE) - 1) * 100
-    cagr = ((final_value / INITIAL_BALANCE) ** (1 / years) - 1) * 100 if years > 0 else 0
+def calculate_and_print_stats(client: TestClient, initial_balance, start_date, end_date, initial_price, end_price):
+    trade_log = client.trade_log
 
-    hold_return = ((df['Close'].iloc[-1] / df['Close'].iloc[0]) - 1) * 100
-    hold_cagr = ((df['Close'].iloc[-1] / df['Close'].iloc[0]) ** (1 / years) - 1) * 100 if years > 0 else 0
+    prices = [trade[1] for trade in trade_log]  # BTC Prices
+    
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
 
-    trades_count = df['signal'].value_counts().get('buy', 0)
+    # Calculate the number of years
+    years = (end_dt - start_dt).days / 365.0
 
+    # Final balance
+    final_value = client.USDT + (client.BTC * float(end_price))  # Cash + BTC value
+    total_return = ((final_value / initial_balance) - 1) * 100
+    cagr = ((final_value / initial_balance) ** (1 / years) - 1) * 100 if years > 0 else 0
+
+    # Calculate Buy & Hold performance
+    hold_return = ((end_price / initial_price) - 1) * 100
+    hold_cagr = ((end_price / initial_price) ** (1 / years) - 1) * 100 if years > 0 else 0
+
+    # === Print Results ===
     print("\n========== BACKTEST RESULT ==========")
-    print(f"Period: {df['datetime'].iloc[0]} to {df['datetime'].iloc[-1]}")
+    print(f"Period: {start_date} to {end_date}")
     print(f"Total Years: {years:.2f}")
     print(f"Final Portfolio Value: {final_value:.2f} USD")
     print(f"Total Return: {total_return:.2f}%")
     print(f"Average Annual Growth Rate (CAGR): {cagr:.2f}%")
     print(f"\nHOLD Total Return: {hold_return:.2f}%")
     print(f"HOLD CAGR: {hold_cagr:.2f}%")
-    print(f"Total Trades: {trades_count}")
     print("====================================\n")
 
 
 
+
 if __name__ == "__main__":
-    start_date = '2021-12-01'
-    end_date = '2024-04-01'
-    backtest('btcusd_1-min_data.csv', start_date, end_date)
+    a = {
+        'bull' : {
+            'start_date' : '2022-12-10',
+            'end_date' : '2025-01-22'
+        },
+        'bear' : {
+            'start_date' : '2021-11-13',
+            'end_date' : '2022-12-16'
+        },
+        'sideways' : {
+            'start_date' : '2018-09-22',
+            'end_date' : '2019-05-11'
+        }
+    }
+    start_date = '2018-09-22'
+    end_date = '2025-01-22'
+    backtest('BTCUSD_1h_Binance.csv', start_date, end_date)
+

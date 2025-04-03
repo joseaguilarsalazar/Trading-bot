@@ -83,3 +83,40 @@ HOLD Total Return: 319.61%
 HOLD CAGR: 192.97%
 Total Trades: 0
 ====================================
+
+################################################################################################
+
+
+========== BACKTEST RESULT ==========
+Period: 2022-12-01 00:00:00+00:00 to 2024-04-01 00:00:00+00:00
+Total Years: 1.33
+Final Portfolio Value: 19167.70 USD
+Total Return: 91.68%
+Average Annual Growth Rate (CAGR): 62.85%
+
+HOLD Total Return: 319.61%
+HOLD CAGR: 192.97%
+Total Trades: 6861
+====================================
+========== BACKTEST RESULT ==========
+Period: 2021-12-01 00:00:00+00:00 to 2022-11-01 00:00:00+00:00
+Total Years: 0.92
+Final Portfolio Value: 8799.30 USD
+Total Return: -12.01%
+Average Annual Growth Rate (CAGR): -13.01%
+
+HOLD Total Return: -65.02%
+HOLD CAGR: -68.16%
+Total Trades: 2914
+====================================
+========== BACKTEST RESULT ==========
+Period: 2021-12-01 00:00:00+00:00 to 2024-04-01 00:00:00+00:00
+Total Years: 2.33
+Final Portfolio Value: 16336.71 USD
+Total Return: 63.37%
+Average Annual Growth Rate (CAGR): 23.40%
+
+HOLD Total Return: 22.07%
+HOLD CAGR: 8.92%
+Total Trades: 10146
+====================================

@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 from binance.client import Client
 import pandas as pd
 from main import (
-    check_signal,
     get_market_regime,
     get_stop_loss_take_profit,
     calculate_position_size,
@@ -15,6 +14,7 @@ from main import (
     send_alert,
     client
 )
+from check_signal import check_signal
 
 # === LOAD ENV VARIABLES ===
 load_dotenv()
@@ -30,7 +30,7 @@ take_profit = None
 
 send_alert('Trading Bot inicialized')
 a = False
-if a == True:
+if a:
     data :pd.DataFrame = get_data()
     print(data.head())
 else:
